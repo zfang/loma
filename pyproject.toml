@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "loma"
+version = "0.1.0"
+description = ""
+authors = ["Felix Fang <felixfangzh@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+transformers = "^4.31.0"
+datasets = "^2.14.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
