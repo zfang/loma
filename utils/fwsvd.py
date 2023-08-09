@@ -1,5 +1,6 @@
 from typing import Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from transformers import LlamaModel
@@ -40,7 +41,14 @@ def check_copy(src: nn.Linear, dst: nn.Module) -> bool:
     return True
 
 
-def fwsvd_weight_copy(src: nn.Linear, dst: nn.Sequential):
+def fwsvd_weight_copy(
+    src: nn.Linear,
+    dst: nn.Sequential,
+    gradient_scale: float = 1.
+):
+    if gradient_scale != 1:
+        src.weight.grad /= gradient_scale
+
     a, b = fisher_weighted_svd(src.weight)
     dst[0].weight.data = a.data
     dst[1].weight.data = b.data
@@ -49,7 +57,11 @@ def fwsvd_weight_copy(src: nn.Linear, dst: nn.Sequential):
         dst[1].bias.data = src.bias.data
 
 
-def fwsvd_decoder_copy(llama_decoder_layer: LlamaDecoderLayer, loma_decoder_layer: LomaDecoderLayer):
+def fwsvd_decoder_copy(
+    llama_decoder_layer: LlamaDecoderLayer,
+    loma_decoder_layer: LomaDecoderLayer,
+    gradient_scale: float = 1.
+):
     for proj_attr in [
         "q_proj",
         "k_proj",
@@ -59,7 +71,7 @@ def fwsvd_decoder_copy(llama_decoder_layer: LlamaDecoderLayer, loma_decoder_laye
         src = getattr(llama_decoder_layer.self_attn, proj_attr)
         dst = getattr(loma_decoder_layer.self_attn, proj_attr)
         if check_copy(src, dst):
-            fwsvd_weight_copy(src, dst)
+            fwsvd_weight_copy(src, dst, gradient_scale)
 
     for proj_attr in [
         "gate_proj",
@@ -69,11 +81,11 @@ def fwsvd_decoder_copy(llama_decoder_layer: LlamaDecoderLayer, loma_decoder_laye
         src = getattr(llama_decoder_layer.mlp, proj_attr)
         dst = getattr(loma_decoder_layer.mlp, proj_attr)
         if check_copy(src, dst):
-            fwsvd_weight_copy(src, dst)
+            fwsvd_weight_copy(src, dst, gradient_scale)
 
 
-def fwsvd_model_copy(llama_model: LlamaModel, loma_model: LomaModel):
+def fwsvd_model_copy(llama_model: LlamaModel, loma_model: LomaModel, gradient_scale: float = 1.):
     assert len(llama_model.layers) == len(loma_model.layers), (len(llama_model.layers), len(loma_model.layers))
 
     for llama_layer, loma_layer in zip(llama_model.layers, loma_model.layers):
-        fwsvd_decoder_copy(llama_layer, loma_layer)
+        fwsvd_decoder_copy(llama_layer, loma_layer, gradient_scale)

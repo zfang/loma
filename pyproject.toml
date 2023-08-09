@@ -9,6 +9,10 @@ readme = "README.md"
 python = "^3.10"
 transformers = "^4.31.0"
 datasets = "^2.14.0"
+bitsandbytes = "^0.41.1"
+wandb = "^0.15.8"
+accelerate = "^0.21.0"
+sentencepiece = "^0.1.99"
 
 
 [build-system]
