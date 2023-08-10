@@ -84,8 +84,17 @@ def fwsvd_decoder_copy(
             fwsvd_weight_copy(src, dst, gradient_scale)
 
 
-def fwsvd_model_copy(llama_model: LlamaModel, loma_model: LomaModel, gradient_scale: float = 1.):
+def fwsvd_model_copy(
+    llama_model: LlamaModel,
+    loma_model: LomaModel,
+    gradient_scale: float = 1.,
+    show_progress: bool = False
+):
     assert len(llama_model.layers) == len(loma_model.layers), (len(llama_model.layers), len(loma_model.layers))
 
-    for llama_layer, loma_layer in zip(llama_model.layers, loma_model.layers):
+    iterable = zip(llama_model.layers, loma_model.layers)
+    if show_progress:
+        iterable = tqmd(iterable, total=len(llama_model.layers), desc="Running FWSVD")
+
+    for llama_layer, loma_layer in iterable:
         fwsvd_decoder_copy(llama_layer, loma_layer, gradient_scale)

@@ -112,7 +112,7 @@ def run(args):
     loma = LomaForCausalLM(loma_config)
     loma.eval()
     loma.seqlen = args.seqlen
-    fwsvd_model_copy(llama.model, loma.model, gradient_scale=args.train_iter)
+    fwsvd_model_copy(llama.model, loma.model, gradient_scale=args.train_iter, show_progress=True)
 
     optimizer = SGD(llama.parameters(), lr=0.01, momentum=0.9)
     optimizer.zero_grad(set_to_none=True)
