@@ -79,6 +79,8 @@ def run(args):
         if i >= args.train_iter:
             break
 
+        data = {key: value.to(device=llama.device) for key, value in data.items()}
+
         loss, _, _ = llama.forward(return_dict=False, **data)
         loss.backward()
         neg_log_likelihood = loss.float().cpu().detach() * args.seqlen
@@ -136,6 +138,8 @@ def run(args):
         ):
             if i >= args.test_iter:
                 break
+
+            data = {key: value.to(device=llama.device) for key, value in data.items()}
 
             llama_loss, _, _ = llama.forward(return_dict=False, **data)
             llama_test_nlls.append(llama_loss.float().cpu().detach() * args.seqlen)
