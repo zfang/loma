@@ -46,12 +46,12 @@ def run(args):
         device_map="auto",
         quantization_config=bnb_config,
     )
-    llama_device = llama.device
 
     if args.optimize_cuda_cache and torch.cuda.is_available():
         # loss.backward() can cause CUDA OOM
         llama.to(device="cpu")
         empty_cuda_cache()
+        # llama.gradient_checkpointing_enable()
 
     llama.eval()
     llama.seqlen = args.seqlen
@@ -137,7 +137,6 @@ def run(args):
     llama_test_nlls = []
     loma_test_nlls = []
     test_iter = min(len(tokenized_datasets["test"]), args.train_iter)
-    llama.to(device=llama_device)
     with torch.no_grad():
         for i, data in tqdm(
             enumerate(test_data_loader),
@@ -148,10 +147,10 @@ def run(args):
                 break
 
             data = {key: value.to(device=llama.device) for key, value in data.items()}
-
             llama_loss, _, _ = llama.forward(return_dict=False, **data)
             llama_test_nlls.append(llama_loss.float().cpu().detach() * args.seqlen)
 
+            data = {key: value.to(device=loma.device) for key, value in data.items()}
             loma_loss, _, _ = loma.forward(return_dict=False, **data)
             loma_test_nlls.append(loma_loss.float().cpu().detach() * args.seqlen)
 
