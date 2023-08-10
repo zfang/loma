@@ -3,6 +3,7 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
+from tqdm import tqdm
 from transformers import LlamaModel
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 
@@ -94,7 +95,7 @@ def fwsvd_model_copy(
 
     iterable = zip(llama_model.layers, loma_model.layers)
     if show_progress:
-        iterable = tqmd(iterable, total=len(llama_model.layers), desc="Running FWSVD")
+        iterable = tqdm(iterable, total=len(llama_model.layers), desc="Running FWSVD")
 
     for llama_layer, loma_layer in iterable:
         fwsvd_decoder_copy(llama_layer, loma_layer, gradient_scale)
