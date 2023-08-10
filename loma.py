@@ -6,6 +6,7 @@ from transformers import LlamaForCausalLM
 from transformers import LlamaModel
 from transformers import LlamaPreTrainedModel
 from transformers import PretrainedConfig
+from transformers.activations import ACT2FN
 from transformers.models.llama.modeling_llama import LlamaAttention
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.llama.modeling_llama import LlamaMLP
@@ -19,18 +20,28 @@ def construct_low_rank_proj(in_features: int, out_features: int, rank: int, bias
     ]))
 
 
-def set_low_rank_proj(module: nn.Module, config: PretrainedConfig, proj_attr: str, config_attr: str):
+def set_low_rank_proj(
+    module: nn.Module,
+    config: PretrainedConfig,
+    proj_attr: str,
+    config_attr: str,
+    in_features: int,
+    out_features: int,
+    bias: bool,
+):
     config_value = getattr(config, config_attr)
     if config_value is not None:
-        proj_module = getattr(module, proj_attr)
         low_rank_proj_module = construct_low_rank_proj(
-            proj_module.in_features,
-            proj_module.out_features,
+            in_features,
+            out_features,
             config_value,
-            proj_module.bias is not None,
+            bias,
         )
 
         setattr(module, proj_attr, low_rank_proj_module)
+    else:
+        setattr(module, proj_attr, nn.Linear(in_features, out_features, bias))
+
 
 
 class LomaConfig(LlamaConfig):
@@ -67,27 +78,59 @@ class LomaConfig(LlamaConfig):
 
 class LomaAttention(LlamaAttention):
     def __init__(self, config: LomaConfig):
-        super().__init__(config)
+        attr_config_tuples = [
+            ("q_proj", "self_attn_q_proj_r", config.hidden_size, config.hidden_size, False),
+            ("k_proj", "self_attn_k_proj_r", config.hidden_size, config.hidden_size, False),
+            ("v_proj", "self_attn_v_proj_r", config.hidden_size, config.hidden_size, False),
+            ("o_proj", "self_attn_o_proj_r", config.hidden_size, config.hidden_size, False),
+        ]
+        if any(getattr(config, config_attr) is not None for _, config_attr, _, _, _ in attr_config_tuples):
+            super(LlamaAttention, self).__init__()
 
-        for proj_attr, config_attr in [
-            ("q_proj", "self_attn_q_proj_r"),
-            ("k_proj", "self_attn_k_proj_r"),
-            ("v_proj", "self_attn_v_proj_r"),
-            ("o_proj", "self_attn_o_proj_r"),
-        ]:
-            set_low_rank_proj(self, config, proj_attr, config_attr)
+            self.config = config
+            self.hidden_size = config.hidden_size
+            self.num_heads = config.num_attention_heads
+            self.head_dim = self.hidden_size // self.num_heads
+            self.num_key_value_heads = config.num_key_value_heads
+            self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+            self.pretraining_tp = config.pretraining_tp
+            self.max_position_embeddings = config.max_position_embeddings
+
+            if (self.head_dim * self.num_heads) != self.hidden_size:
+                raise ValueError(
+                    f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+                    f" and `num_heads`: {self.num_heads})."
+                )
+
+            for proj_attr, config_attr, in_features, out_features, bias in attr_config_tuples:
+                set_low_rank_proj(self, config, proj_attr, config_attr, in_features, out_features, bias)
+
+            self._init_rope()
+        else:
+            super().__init__(config)
 
 
 class LomaMLP(LlamaMLP):
     def __init__(self, config: LomaConfig):
-        super().__init__(config)
+        attr_config_tuples = [
+            ("gate_proj", "mlp_up_proj_r", config.hidden_size, config.intermediate_size, False),
+            ("up_proj", "mlp_up_proj_r", config.hidden_size, config.intermediate_size, False),
+            ("down_proj", "mlp_down_proj_r", config.intermediate_size, config.hidden_size, False),
+        ]
 
-        for proj_attr, config_attr in [
-            ("gate_proj", "mlp_up_proj_r"),
-            ("up_proj", "mlp_up_proj_r"),
-            ("down_proj", "mlp_down_proj_r"),
-        ]:
-            set_low_rank_proj(self, config, proj_attr, config_attr)
+        if any(getattr(config, config_attr) is not None for _, config_attr, _, _, _ in attr_config_tuples):
+            super(LlamaMLP, self).__init__()
+
+            self.pretraining_tp = config.pretraining_tp
+            self.hidden_size = config.hidden_size
+            self.intermediate_size = config.intermediate_size
+
+            for proj_attr, config_attr, in_features, out_features, bias in attr_config_tuples:
+                set_low_rank_proj(self, config, proj_attr, config_attr, in_features, out_features, bias)
+
+            self.act_fn = ACT2FN[config.hidden_act]
+        else:
+            super().__init__(config)
 
 
 class LomaDecoderLayer(LlamaDecoderLayer):

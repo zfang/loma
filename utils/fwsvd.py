@@ -9,6 +9,7 @@ from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 
 from loma import LomaDecoderLayer
 from loma import LomaModel
+from utils.common import empty_cuda_cache
 
 
 def svd_lowrank(input_mat: torch.Tensor, rank: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -17,8 +18,10 @@ def svd_lowrank(input_mat: torch.Tensor, rank: int) -> Tuple[torch.Tensor, torch
 
 
 @torch.no_grad()
-def fisher_weighted_svd(input_mat: torch.Tensor, rank: int) -> Tuple[torch.Tensor, torch.Tensor]:
+def fisher_weighted_svd(input_mat: torch.Tensor, rank: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
     I_hat = torch.diag((input_mat.grad ** 2).sum(dim=-1) ** 0.5)
+    input_mat = input_mat.to(device=device)
+    I_hat = I_hat.to(device=device)
     U_S_truncated, Vh_truncated = svd_lowrank(I_hat @ input_mat, rank)
     I_hat_inv = 1 / I_hat  # Quick way to compute the inverse of a diagonal matrix is 1/d
     A = I_hat_inv @ U_S_truncated
@@ -50,7 +53,7 @@ def fwsvd_weight_copy(
     if gradient_scale != 1:
         src.weight.grad /= gradient_scale
 
-    a, b = fisher_weighted_svd(src.weight, rank=dst[0].out_features)
+    a, b = fisher_weighted_svd(src.weight, rank=dst[0].out_features, device=dst[0].weight.device)
     dst[0].weight.data = a.data
     dst[1].weight.data = b.data
 
