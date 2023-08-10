@@ -49,7 +49,7 @@ def fwsvd_weight_copy(
     if gradient_scale != 1:
         src.weight.grad /= gradient_scale
 
-    a, b = fisher_weighted_svd(src.weight)
+    a, b = fisher_weighted_svd(src.weight, rank=dst[0].out_features)
     dst[0].weight.data = a.data
     dst[1].weight.data = b.data
 

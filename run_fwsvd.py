@@ -42,6 +42,7 @@ def run(args):
 
     set_seed(args.seed)
     llama = LlamaForCausalLM.from_pretrained(args.model_name_or_path, device_map="auto", quantization_config=bnb_config)
+    llama.eval()
     llama.seqlen = args.seqlen
     if args.fast_tokenizer:
         from transformers import LlamaTokenizerFast
@@ -53,8 +54,8 @@ def run(args):
     tokenized_datasets = get_datasets(
         name=args.dataset,
         tokenizer=tokenizer,
-        train_nsamples=args.train_iter * args.batch_size * 2,
-        test_nsamples=args.test_iter * args.batch_size * 2,
+        train_nsamples=args.train_iter * args.batch_size * 5,
+        test_nsamples=args.test_iter * args.batch_size * 5,
         seqlen=args.seqlen
     )
 
@@ -69,6 +70,7 @@ def run(args):
 
     llama_train_nlls = []
     train_iter = min(len(tokenized_datasets["train"]), args.train_iter)
+    llama.eval()
     for i, data in tqdm(
         enumerate(train_data_loader),
         total=train_iter,
@@ -79,11 +81,13 @@ def run(args):
 
         loss, _, _ = llama.forward(return_dict=False, **data)
         loss.backward()
-        neg_log_likelihood = loss.float() * args.seqlen
+        neg_log_likelihood = loss.float().cpu().detach() * args.seqlen
         llama_train_nlls.append(neg_log_likelihood)
 
         if args.log_wandb:
             wandb.log({"fwsvd/llama_train_loss": loss})
+
+        empty_cuda_cache()
 
     llama_train_perplexity = perplexity(
         llama_train_nlls,
@@ -106,6 +110,7 @@ def run(args):
 
     loma_config = LomaConfig.from_llama_config(llama_config, **loma_config_kwargs)
     loma = LomaForCausalLM(loma_config)
+    loma.eval()
     loma.seqlen = args.seqlen
     fwsvd_model_copy(llama.model, loma.model, gradient_scale=args.train_iter)
 
@@ -133,16 +138,18 @@ def run(args):
                 break
 
             llama_loss, _, _ = llama.forward(return_dict=False, **data)
-            llama_test_nlls.append(llama_loss.float() * args.seqlen)
+            llama_test_nlls.append(llama_loss.float().cpu().detach() * args.seqlen)
 
             loma_loss, _, _ = llama.forward(return_dict=False, **data)
-            loma_test_nlls.append(loma_loss.float() * args.seqlen)
+            loma_test_nlls.append(loma_loss.float().cpu().detach() * args.seqlen)
 
             if args.log_wandb:
                 wandb.log({
                     "fwsvd/llama_test_loss": llama_loss,
                     "fwsvd/loma_test_loss": loma_loss,
                 })
+
+            empty_cuda_cache()
 
     llama_test_perplexity = perplexity(
         llama_test_nlls,
