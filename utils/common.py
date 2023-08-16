@@ -5,6 +5,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+from torch import nn
 
 
 def set_seed(seed: Optional[int]):
@@ -23,3 +24,7 @@ def empty_cuda_cache():
         gc.collect()
         torch.cuda.empty_cache()
         gc.collect()
+
+
+def count_parameters(model: nn.Module):
+    return sum(p.numel() for p in model.parameters())

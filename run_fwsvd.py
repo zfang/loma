@@ -1,7 +1,6 @@
 import json
 
 import torch
-from torch.optim import SGD
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import BitsAndBytesConfig
@@ -11,6 +10,7 @@ from transformers import LlamaForCausalLM
 
 from loma import LomaConfig
 from loma import LomaForCausalLM
+from utils.common import count_parameters
 from utils.common import empty_cuda_cache
 from utils.common import perplexity
 from utils.common import set_seed
@@ -41,7 +41,18 @@ def run(args):
         )
 
     set_seed(args.seed)
-    llama = LlamaForCausalLM.from_pretrained(args.model_name_or_path, device_map="auto", quantization_config=bnb_config)
+    llama = LlamaForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        device_map="auto",
+        quantization_config=bnb_config,
+    )
+
+    if args.optimize_cuda_cache and torch.cuda.is_available():
+        # loss.backward() can cause CUDA OOM
+        llama.to(device="cpu")
+        empty_cuda_cache()
+        # llama.gradient_checkpointing_enable()
+
     llama.eval()
     llama.seqlen = args.seqlen
     if args.fast_tokenizer:
@@ -79,6 +90,7 @@ def run(args):
         if i >= args.train_iter:
             break
 
+        data = {key: value.to(device=llama.device) for key, value in data.items()}
         loss, _, _ = llama.forward(return_dict=False, **data)
         loss.backward()
         neg_log_likelihood = loss.float().cpu().detach() * args.seqlen
@@ -86,8 +98,6 @@ def run(args):
 
         if args.log_wandb:
             wandb.log({"fwsvd/llama_train_loss": loss})
-
-        empty_cuda_cache()
 
     llama_train_perplexity = perplexity(
         llama_train_nlls,
@@ -109,14 +119,13 @@ def run(args):
         )
 
     loma_config = LomaConfig.from_llama_config(llama_config, **loma_config_kwargs)
-    loma = LomaForCausalLM(loma_config)
+    loma = LomaForCausalLM._from_config(loma_config, torch_dtype=torch.float16)
+    if torch.cuda.is_available():
+        loma.to(device="cuda")
     loma.eval()
     loma.seqlen = args.seqlen
-    fwsvd_model_copy(llama.model, loma.model, gradient_scale=args.train_iter)
-
-    optimizer = SGD(llama.parameters(), lr=0.01, momentum=0.9)
-    optimizer.zero_grad(set_to_none=True)
-    del optimizer
+    fwsvd_model_copy(llama.model, loma.model, gradient_scale=args.train_iter, show_progress=True)
+    llama.zero_grad(set_to_none=True)
     empty_cuda_cache()
 
     test_data_loader = DataLoader(
@@ -137,10 +146,12 @@ def run(args):
             if i >= args.test_iter:
                 break
 
+            data = {key: value.to(device=llama.device) for key, value in data.items()}
             llama_loss, _, _ = llama.forward(return_dict=False, **data)
             llama_test_nlls.append(llama_loss.float().cpu().detach() * args.seqlen)
 
-            loma_loss, _, _ = llama.forward(return_dict=False, **data)
+            data = {key: value.to(device=loma.device) for key, value in data.items()}
+            loma_loss, _, _ = loma.forward(return_dict=False, **data)
             loma_test_nlls.append(loma_loss.float().cpu().detach() * args.seqlen)
 
             if args.log_wandb:
@@ -163,9 +174,11 @@ def run(args):
     )
 
     stats = {
-        "fwsvd/llama_train_perplexity": llama_train_perplexity,
-        "fwsvd/llama_test_perplexity": llama_test_perplexity,
-        "fwsvd/loma_test_perplexity": loma_test_perplexity,
+        "fwsvd/llama_parameter_count": count_parameters(llama),
+        "fwsvd/loma_parameter_count": count_parameters(loma),
+        "fwsvd/llama_train_perplexity": llama_train_perplexity.cpu().detach().numpy().item(),
+        "fwsvd/llama_test_perplexity": llama_test_perplexity.cpu().detach().numpy().item(),
+        "fwsvd/loma_test_perplexity": loma_test_perplexity.cpu().detach().numpy().item(),
     }
 
     if args.log_wandb:
@@ -191,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--seqlen", type=int, default=512)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fast_tokenizer", action="store_true")
+    parser.add_argument("--optimize_cuda_cache", action="store_true")
     parser.add_argument("--log_wandb", action="store_true", help="Whether to log to wandb.")
 
     quantization_group = parser.add_mutually_exclusive_group()

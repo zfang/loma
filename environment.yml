@@ -1,6 +1,7 @@
 name: loma
 channels:
   - pytorch
+  - nvidia
   - conda-forge
   - nodefaults
 dependencies:
@@ -8,4 +9,4 @@ dependencies:
   - pip
   - poetry
   - pytorch
-  - cudatoolkit
+  - pytorch-cuda=11.8

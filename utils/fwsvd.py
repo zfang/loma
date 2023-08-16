@@ -1,8 +1,8 @@
 from typing import Tuple
 
-import numpy as np
 import torch
 from torch import nn
+from tqdm import tqdm
 from transformers import LlamaModel
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 
@@ -16,10 +16,14 @@ def svd_lowrank(input_mat: torch.Tensor, rank: int) -> Tuple[torch.Tensor, torch
 
 
 @torch.no_grad()
-def fisher_weighted_svd(input_mat: torch.Tensor, rank: int) -> Tuple[torch.Tensor, torch.Tensor]:
-    I_hat = torch.diag((input_mat.grad ** 2).sum(dim=-1) ** 0.5)
+def fisher_weighted_svd(
+    input_mat: torch.Tensor,
+    input_grad: torch.Tensor,
+    rank: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    I_hat = torch.diag((input_grad ** 2).sum(dim=-1) ** 0.5)
     U_S_truncated, Vh_truncated = svd_lowrank(I_hat @ input_mat, rank)
-    I_hat_inv = 1 / I_hat  # Quick way to compute the inverse of a diagonal matrix is 1/d
+    I_hat_inv = torch.linalg.inv(I_hat)
     A = I_hat_inv @ U_S_truncated
     B = Vh_truncated
     return A, B
@@ -49,12 +53,20 @@ def fwsvd_weight_copy(
     if gradient_scale != 1:
         src.weight.grad /= gradient_scale
 
-    a, b = fisher_weighted_svd(src.weight, rank=dst[0].out_features)
-    dst[0].weight.data = a.data
-    dst[1].weight.data = b.data
+    device = dst[0].weight.device
+    dtype = dst[0].weight.dtype
+    input_grad = src.weight.grad.T.to(device=device)
+    input_mat = src.weight.T.to(device=device)
+    a, b = fisher_weighted_svd(
+        input_mat=input_mat,
+        input_grad=input_grad,
+        rank=dst[0].out_features
+    )
+    dst[0].weight.data = a.T.data.to(dtype=dtype)
+    dst[1].weight.data = b.T.data.to(dtype=dtype)
 
     if src.bias is not None:
-        dst[1].bias.data = src.bias.data
+        dst[1].bias.data = src.bias.data.to(dtype=dtype)
 
 
 def fwsvd_decoder_copy(
@@ -84,8 +96,17 @@ def fwsvd_decoder_copy(
             fwsvd_weight_copy(src, dst, gradient_scale)
 
 
-def fwsvd_model_copy(llama_model: LlamaModel, loma_model: LomaModel, gradient_scale: float = 1.):
+def fwsvd_model_copy(
+    llama_model: LlamaModel,
+    loma_model: LomaModel,
+    gradient_scale: float = 1.,
+    show_progress: bool = False
+):
     assert len(llama_model.layers) == len(loma_model.layers), (len(llama_model.layers), len(loma_model.layers))
 
-    for llama_layer, loma_layer in zip(llama_model.layers, loma_model.layers):
+    iterable = zip(llama_model.layers, loma_model.layers)
+    if show_progress:
+        iterable = tqdm(iterable, total=len(llama_model.layers), desc="Running FWSVD")
+
+    for llama_layer, loma_layer in iterable:
         fwsvd_decoder_copy(llama_layer, loma_layer, gradient_scale)
